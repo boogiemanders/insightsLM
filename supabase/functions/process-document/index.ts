@@ -13,7 +13,19 @@ serve(async (req) => {
   }
 
   try {
-    const { sourceId, filePath, sourceType } = await req.json()
+    const { sourceId } = await req.json()
+    const authorization = req.headers.get('authorization') || ''
+    const caller = createClient(Deno.env.get('SUPABASE_URL') || '', Deno.env.get('SUPABASE_ANON_KEY') || '', { global: { headers: { Authorization: authorization } } })
+    const { data: auth, error: authError } = await caller.auth.getUser()
+    if (authError || !auth.user) return new Response(JSON.stringify({ error: 'Unauthorized' }), { status: 401, headers: corsHeaders })
+    // RLS binds the source to the authenticated caller's notebook. Use the
+    // saved file path and type, never a different file supplied in the request.
+    const { data: source, error: sourceError } = await caller.from('sources').select('file_path,type').eq('id', sourceId).single()
+    if (sourceError || !source) return new Response(JSON.stringify({ error: 'Source unavailable' }), { status: 404, headers: corsHeaders })
+    const filePath = source.file_path
+    const sourceType = source.type
+    const { error: stateError } = await caller.from('sources').update({ processing_status: 'processing' }).eq('id', sourceId)
+    if (stateError) return new Response(JSON.stringify({ error: 'Could not start processing' }), { status: 503, headers: corsHeaders })
 
     if (!sourceId || !filePath || !sourceType) {
       return new Response(
